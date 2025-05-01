@@ -6,6 +6,7 @@ import aiohttp
 import time
 import json
 import pathlib
+import asyncio
 
 from pathlib import Path
 from datetime import datetime as dt
@@ -30,18 +31,26 @@ class Note:
         self.date = date
         self.time = time
         self.title = ""
+        self.summary = ""
+        self.folder = ""
 
     def generate_title(self):
         client = ollama.Client(host=config.ollama_url)
-        print('Waiting for title generation...')
+        
         response = client.generate(
             prompt=config.ollama_title_prompt + self.text,
             model=config.ollama_model
         )
-        print('Title generated')
+        
         resp = response.get('response', 'Untitled Note')
+        think_content = re.search(r'<think>(.*?)</think>', resp, flags=re.DOTALL)
+        
+        if think_content:
+            log_basic(f"AI thinking process: {think_content.group(1).strip()}")
+
         # Remove <think></think> tags if present
         resp = re.sub(r'<think>.*?</think>', '', resp, flags=re.DOTALL)
+        
         # Trim leading and trailing whitespace
         resp = resp.strip()
         return re.sub("[\"\']", "", resp)
@@ -49,17 +58,29 @@ class Note:
     def generate_summary(self):
         if self.text == "":
             return "No summary for empty text"
+        
         client = ollama.Client(host=config.ollama_url)
         log_basic(config.ollama_summary_prompt + self.text)
+
         print('Waiting for summary generation...')
+        
         response = client.generate(
             prompt=config.ollama_summary_prompt + self.text,
             model=config.ollama_model
         )
+        
         print('Summary generated')
         r = response.get('response', 'No summary generated')
+
+        # Extract content from <think> tags if present
+        think_content = re.search(r'<think>(.*?)</think>', r, flags=re.DOTALL)
+        
+        if think_content:
+            log_basic(f"AI thinking process: {think_content.group(1).strip()}")
+
         # Remove <think></think> tags if present
         r = re.sub(r'<think>.*?</think>', '', r, flags=re.DOTALL)
+        
         # Trim leading and trailing whitespace
         r = r.strip()
         return r
@@ -77,7 +98,7 @@ class Note:
 
             structs = ''
             with open(folders_file) as f:
-                structs = json.load(f)
+                structs = f.read()
 
             log_basic('Folders structure loaded')
 
@@ -86,16 +107,16 @@ class Note:
             structure_select_prompt = """
                 Проанализируй текст заметки и определи наиболее подходящую папку из структуры.
                 Верни только JSON-объект с единственным полем "selected_path".
-                Выбрать можно ТОЛЬКО существующую папку из структуры.
-                Структура папок (это JSON массив):"\n
-                """ + json.dumps(structs) + """
+                ВАЖНО: Выбрать можно ТОЛЬКО существующую папку из структуры. Нет возможности создать новую папку, только выбрать из существующих.
+                Вот список доступных папок :"\n
+                """ + structs + """
                 "
 
-                Текст заметки:"
-                """ + self.text + """"
+                А вот текст заметки который надо отнести к одной из папок приведенных выше:"
+                """ + self.summary + """"
 
                 Ответ должен быть в формате:
-                {"selected_path": "путь/к/папке"}
+                {"selected_path": "путь/к/выбранной/папке"}
 
                 Если не можешь определить подходящую папку, верни:
                 {"selected_path": "unsorted"}
@@ -108,6 +129,10 @@ class Note:
 
             log_basic('Folder selected')
             r = response.get('response', 'No folder selected')
+
+            think_content = re.search(r'<think>(.*?)</think>', r, flags=re.DOTALL)
+            if think_content:
+                log_basic(f"AI thinking process: {think_content.group(1).strip()}")
 
             # Remove <think></think> tags if present
             r = re.sub(r'<think>.*?</think>', '', r, flags=re.DOTALL)
@@ -123,7 +148,8 @@ class Note:
             except json.JSONDecodeError:
                 result = 'unsorted'
             log_basic(result)
-            return result.replace('"', '')
+            self.folder = result.replace('"', '')
+            return self.folder
         except Exception as e:
             log_basic("Error while loading folders structure from file -> " + str(e))
             return 'unsorted'
@@ -177,7 +203,7 @@ async def handle_photo(message: Message):
     photo_and_caption = f'{forward_info}![[{file_name}]]\n{await get_formatted_caption(message)}'
     note.text=photo_and_caption
     
-    save_message(note)
+    save_message(note, message)
 
 @dp.message_handler(content_types=[ContentType.DOCUMENT])
 async def handle_document(message: Message):
@@ -217,7 +243,7 @@ async def handle_document(message: Message):
         forward_info = get_forward_info(message)
         note.text = f'{forward_info}[[{file_name}]]\n{await get_formatted_caption(message)}'
 
-    save_message(note)
+    save_message(note, message)
 
 
 @dp.message_handler(content_types=[ContentType.CONTACT])
@@ -228,7 +254,7 @@ async def handle_contact(message: Message):
     note = note_from_message(message)
     print(f'Got contact')
     note.text = await get_contact_data(message)
-    save_message(note)
+    save_message(note, message)
 
 
 @dp.message_handler(content_types=[ContentType.LOCATION])
@@ -239,7 +265,7 @@ async def handle_location(message: Message):
     print(f'Got location')
     note = note_from_message(message)
     note.text = get_location_note(message)
-    save_message(note)
+    save_message(note, message)
 
 
 @dp.message_handler(content_types=[ContentType.ANIMATION])
@@ -248,7 +274,6 @@ async def handle_animation(message: Message):
     log_message(message)
     file_name = unique_filename(message.document.file_name, config.photo_path)
     log_basic(f'Received animation {file_name} from @{message.from_user.username}')
-    print(f'Got animation: {file_name}')
     note = note_from_message(message)
 
     file = await message.document.get_file()
@@ -257,14 +282,14 @@ async def handle_animation(message: Message):
 
     forward_info = get_forward_info(message)
     note.text = f'{forward_info}![[{file_name}]]\n{await get_formatted_caption(message)}'
-    save_message(note)
+    save_message(note, message)
 
 
 @dp.message_handler(content_types=[ContentType.VIDEO])
 async def handle_video(message: Message):
     note = note_from_message(message)
     note.text = f'{get_forward_info(message)}\n{await get_formatted_caption(message)}'
-    save_message(note)
+    save_message(note, message)
 
 @dp.message_handler(content_types=[ContentType.VIDEO_NOTE])
 async def handle_video_note(message: Message):
@@ -274,7 +299,7 @@ async def handle_video_note(message: Message):
     print(f'Got video note: {file_name}')
     note = note_from_message(message)
     note.text = f'{get_forward_info(message)}\n{await get_formatted_caption(message)}'
-    save_message(note)
+    save_message(note, message)
 
 
 @dp.message_handler()
@@ -285,12 +310,20 @@ async def process_message(message: types.Message):
     log_basic(f'Received text message from @{message.from_user.username}')
     log_message(message)
 
+    # Send initial processing message
+    await message.answer("🔄 Processing your message...")
+
     note = note_from_message(message)
     message_body = await embed_formatting(message)
-    forward_info = get_forward_info(message)
-    note.text = forward_info + message_body
+    # Remove task checkbox notation (- [ ]) from anywhere in the message
+    message_body = re.sub(r'\- \[ \]', '', message_body)
+    # Clean up any extra whitespace that might be left after removal
+    message_body = re.sub(r'\n\s*\n', '\n\n', message_body)
+    message_body = message_body.strip()
+    note.text = message_body
     log_basic(f'Saving note (via AI processing)')
-    save_message(note)
+    save_message(note, message)
+    log_basic(f'Done processing message. Notes saved in {config.inbox_path} folder with inner folder: {note.folder}')
 
 
 # Functions
@@ -408,12 +441,15 @@ def format_messages() -> bool:
 def create_link_info() -> bool:
     return False if 'create_link_info' not in dir(config) else config.create_link_info
 
-def save_message(note: Note) -> None:
+def save_message(note: Note, message: Message) -> None:
     curr_date = note.date
     curr_time = note.time
     print('Generating title and summary')
-    note_title = note.generate_title() + ".md"
-    note_summary = "Summary: " + note.generate_summary()
+    note.title = note.generate_title()
+    note.summary = note.generate_summary()
+    note_title = note.title + ".md"
+    note_summary = "Summary: " + note.summary
+
     log_basic(f'Received summary {note_summary}')
 
     if one_line_note():
@@ -436,6 +472,9 @@ def save_message(note: Note) -> None:
 
     with open(note_file, 'a', encoding='UTF-8') as f:
         f.write(note_text)
+
+    # Send completion message with file location
+    asyncio.create_task(message.answer(f"✅ Note saved successfully!\n\n📁 Folder: {note_folder}\n📝 Title: {note_title}"))
 
 def check_if_task(note_body) -> str:
     is_task = False

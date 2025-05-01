@@ -8,7 +8,19 @@ def get_folder_structure(root_dir, base_path=""):
     Each folder has a path and an empty purpose field
     """
     structure = []
-    
+    # Define folders to skip during structure generation
+    folders_to_skip = [
+        ".git",
+        ".obsidian",
+        ".trash",
+        "node_modules",
+        "__pycache__",
+        ".vscode",
+        ".github",
+        ".idea",
+        "journal",
+        "chinese",
+    ]
     # Get all items in the current directory
     items = os.listdir(root_dir)
     
@@ -16,7 +28,7 @@ def get_folder_structure(root_dir, base_path=""):
         item_path = os.path.join(root_dir, item)
         
         # Skip hidden files and directories
-        if item.startswith('.'):
+        if item.startswith('.') or item in folders_to_skip:
             continue
             
         # Skip if it's a file
@@ -63,10 +75,26 @@ def main():
     structure.sort(key=lambda x: x["path"])
     
     # Save to structure.json
-    with open('structure.json', 'w', encoding='utf-8') as f:
-        json.dump(structure, f, indent=4, ensure_ascii=False)
+    #with open('structure.json', 'w', encoding='utf-8') as f:
+        # First, save the full structure to structure.json
+        #json.dump(structure, f, indent=4, ensure_ascii=False)
         
-    print("Structure saved to structure.json")
+        # Then, extract all paths and save them to a separate file
+    paths = [item["path"] for item in structure]
+        
+        # Save paths to paths.txt
+    with open('paths.txt', 'w', encoding='utf-8') as paths_file:
+        for path in paths:
+            paths_file.write(f"- {path}\n")
+    
+    print("Paths list saved to paths.txt")
+    
+    # Return to the original file for the main structure
+    # f.seek(0)
+    # f.truncate()
+    # json.dump(structure, f, indent=4, ensure_ascii=False)
+    
+    #print("Structure saved to structure.json")
 
 if __name__ == "__main__":
     main() 

@@ -122,4 +122,4 @@ ollama_summary_prompt="""
 """
 
 # Path to the file with the structure of the Obsidian vault
-ollama_folders_file='structure.json'
+ollama_folders_file='paths.txt'

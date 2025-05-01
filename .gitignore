@@ -138,3 +138,13 @@ telegram_bot.py
 waiter_sync.py
 .cursor/
 structure.json
+paths.txt
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Bot specific
+FromOutside/
+img/
+bot.log

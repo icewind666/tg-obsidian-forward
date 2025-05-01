@@ -2,21 +2,19 @@
 FROM python:3.10-slim
 
 # Set environment variables
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TZ=UTC
 
 # Create a directory for the bot
 WORKDIR /usr/src/app
 
-# Copy the requirements.txt file into the container
-COPY requirements.txt ./
-
-COPY structure.json ./
-
-# Install the dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
 # Install system dependencies including ffmpeg and curl
-RUN apt-get update && apt-get install -y ffmpeg libsndfile1 curl --no-install-recommends && \
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libsndfile1 \
+    curl \
+    --no-install-recommends && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -25,9 +23,20 @@ RUN mkdir -p /models && \
     cd /models && \
     curl -O https://openaipublic.blob.core.windows.net/whisper/models/medium.pt
 
-# Copy the bot script and config file into the container
-COPY tg-obsidian-forward-bot.py ./
-COPY config.py ./
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt ./
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p /usr/src/app/img
+
+# Set proper permissions
+RUN chmod +x /usr/src/app/tg-obsidian-forward-bot.py
 
 # Define the command to run the bot
 CMD ["python", "./tg-obsidian-forward-bot.py"]
