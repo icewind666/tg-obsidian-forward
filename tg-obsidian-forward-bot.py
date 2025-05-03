@@ -33,6 +33,7 @@ class Note:
         self.title = ""
         self.summary = ""
         self.folder = ""
+        self.tags = []
 
     def generate_title(self):
         client = ollama.Client(host=config.ollama_url)
@@ -84,6 +85,55 @@ class Note:
         # Trim leading and trailing whitespace
         r = r.strip()
         return r
+    
+    def generate_tags(self):
+        if self.summary == "":
+            return []
+        
+        client = ollama.Client(host=config.ollama_url)
+        tags_prompt = """
+            Проанализируй текст и определи до 5 наиболее релевантных тегов.
+            Теги должны быть без специальных символов и пробелов.
+            Используй только буквы, цифры и знак тире.
+            Верни теги в формате JSON массива строк.
+            Пример: ["тег1", "тег2", "тег3"]
+            
+            Текст для анализа:
+            """ + self.summary
+
+        response = client.generate(
+            prompt=tags_prompt,
+            model=config.ollama_model
+        )
+        
+        r = response.get('response', '[]')
+        
+        # Extract content from <think> tags if present
+        think_content = re.search(r'<think>(.*?)</think>', r, flags=re.DOTALL)
+        if think_content:
+            log_basic(f"AI thinking process for tags: {think_content.group(1).strip()}")
+
+        # Remove <think></think> tags if present
+        r = re.sub(r'<think>.*?</think>', '', r, flags=re.DOTALL)
+        
+        # Trim leading and trailing whitespace
+        r = r.strip()
+        
+        try:
+            tags = json.loads(r)
+            if not isinstance(tags, list):
+                tags = []
+            # Clean tags - remove special characters and spaces
+            tags = [re.sub(r'[^a-zA-Zа-яА-Я0-9_]', '', tag) for tag in tags]
+            # Remove empty tags
+            tags = [tag for tag in tags if tag]
+            # Limit to 5 tags
+            tags = tags[:5]
+            self.tags = tags
+            return tags
+        except json.JSONDecodeError:
+            log_basic("Error parsing tags JSON")
+            return []
     
     '''
     Select proper folder for this note with Ollama.
@@ -164,6 +214,25 @@ if 'log_level' in dir(config) and config.log_level >= 1:
     logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', level=logging.INFO, filename = 'bot.log', encoding = 'UTF-8', datefmt = '%Y-%m-%d %H:%M:%S')
     log = logging.getLogger()
 
+if config.recognize_voice:
+    import torch
+    import whisper
+    import gc
+
+    whisper_device = getattr(config, 'whisper_device', 'cpu')
+
+    if whisper_device == 'cpu':
+        torch.cuda.is_available = lambda : False
+
+    model = whisper.load_model(config.whisper_model)
+
+    if whisper_device == 'cuda' and torch.cuda.is_available():
+        model = model.to('cuda')
+    else:
+        model = model.to('cpu')
+
+    print(f'Prepared for speech-to-text recognition on {whisper_device}')
+
 bot = Bot(token = config.token)
 dp = Dispatcher(bot)
 
@@ -183,6 +252,34 @@ async def help(message: types.Message):
     '''
     await message.reply(reply_text)
 
+@dp.message_handler(content_types=[ContentType.VOICE])
+async def handle_voice_message(message: Message):
+    log_basic(f'Received voice message from @{message.from_user.username}')
+    if not config.recognize_voice:
+        log_basic(f'Voice recognition is turned OFF')
+        return
+
+    note = note_from_message(message)
+
+    path = os.path.dirname(__file__)
+    voice_file = await bot.get_file(message.voice.file_id)
+    voice_file_ext = message.voice.mime_type.split('/')[-1]
+    file_name=f"{message.voice.file_id}.{voice_file_ext}"
+    await handle_file(file=voice_file, file_name=file_name, path=path)
+
+    file_full_path = os.path.join(path, file_name)
+
+    try:
+        note_stt = await stt(file_full_path)
+        note.text = note_stt
+    except Exception as e:
+        await answer_message(message, f'🤷‍♂️ {e}')
+    try:
+        await answer_message(message, note_stt)
+    except Exception as e:
+        await answer_message(message, f'🤷‍♂️ {e}')
+    save_message(note, message)
+    os.remove(file_full_path)
 
 @dp.message_handler(content_types=[ContentType.PHOTO])
 async def handle_photo(message: Message):
@@ -311,7 +408,7 @@ async def process_message(message: types.Message):
     log_message(message)
 
     # Send initial processing message
-    await message.answer("🔄 Processing your message...")
+    #await bot.set_message_reaction(chat_id=message.from_user.id, message_id=message.message_id, reaction=[{'type':'emoji', 'emoji':'👌'}])
 
     note = note_from_message(message)
     message_body = await embed_formatting(message)
@@ -447,6 +544,7 @@ def save_message(note: Note, message: Message) -> None:
     print('Generating title and summary')
     note.title = note.generate_title()
     note.summary = note.generate_summary()
+    note.generate_tags()  # Generate tags after summary
     note_title = note.title + ".md"
     note_summary = "Summary: " + note.summary
 
@@ -459,7 +557,11 @@ def save_message(note: Note, message: Message) -> None:
     else:        
         # Keep line breaks and add a header with a time stamp
         note_body = check_if_task(check_if_negative(note.text))
-        note_text = f'#### [[{curr_date}]] {curr_time}\n\n{note_summary}\n\n{note_body}\n\n'
+        note_text = f'#### [[{curr_date}]] {curr_time}\n\n{note_summary}\n\n'
+        # Add tags if any
+        if note.tags:
+            note_text += f'Tags: {" ".join([f"#{tag}" for tag in note.tags])}\n\n'
+        note_text += f'{note_body}\n\n'
     
     note_folder = note.select_folder()
     log_basic('Selected folder is : ' + note_folder)

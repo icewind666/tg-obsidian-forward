@@ -48,7 +48,7 @@ create_link_info = True
 # This requires Whisper ( https://github.com/openai/whisper ), FFMPEG, Python and PyTorch to be installed
 # on the machine where the script is running.
 # If False, voice messages will not be recognized nor stored.
-recognize_voice = False
+recognize_voice = True
 
 # Whisper speech recognition software's model options and their relative speed and size of DB:
 # tiny (x32, 78MB), base(x16, 145MB), small(x6, 484MB), medium(x2, 1.5GB), large(x1, 3.1GB).
@@ -80,11 +80,11 @@ one_line_note = False
 # the message will be converted to a Markdown task like the following:
 # - [ ] Complete one important task
 # To turn this off, specify task_keywords = {}
-task_keywords = {'задач', 'сделать', 'todo', 'complete'}
+task_keywords = {}
 
 # If one of the keywords is found in the message text, the specified tag will be added to the message
 # To turn this off, specify negative_keywords = {}
-negative_keywords = {'негатив', 'печал'}
+negative_keywords = {}
 negative_tag = '#негатив'
 
 # The ID of the chat the bot should read. Messages from other chats will be ignored.
